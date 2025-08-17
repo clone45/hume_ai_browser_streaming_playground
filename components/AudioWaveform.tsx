@@ -23,41 +23,83 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
   const [currentPlaybackPosition, setCurrentPlaybackPosition] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Parse WAV file and extract PCM data
-  const parseWavData = (arrayBuffer: ArrayBuffer): Float32Array => {
+  // Convert AudioBuffer to WAV blob utility
+  const audioBufferToWav = (buffer: AudioBuffer): Blob => {
+    const length = buffer.length;
+    const numberOfChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const blockAlign = numberOfChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = length * blockAlign;
+    const headerSize = 44;
+    const totalSize = headerSize + dataSize;
+
+    const arrayBuffer = new ArrayBuffer(totalSize);
     const view = new DataView(arrayBuffer);
     
-    try {
-      // Skip WAV header (44 bytes) and read PCM data
-      const dataStart = 44;
-      const bytesPerSample = 2; // 16-bit
-      const numSamples = (arrayBuffer.byteLength - dataStart) / bytesPerSample;
-      
-      const samples = new Float32Array(numSamples);
-      
-      for (let i = 0; i < numSamples; i++) {
-        // Read 16-bit signed PCM sample
-        const sampleOffset = dataStart + (i * bytesPerSample);
-        if (sampleOffset + 1 < arrayBuffer.byteLength) {
-          const sample = view.getInt16(sampleOffset, true); // little-endian
-          samples[i] = sample / 32768.0; // Normalize to -1.0 to 1.0
-        }
+    // Write WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
       }
+    };
+
+    writeString(0, 'RIFF');
+    view.setUint32(4, totalSize - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitsPerSample, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    // Write PCM data
+    let offset = 44;
+    for (let i = 0; i < length; i++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+        view.setInt16(offset, sample * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  };
+
+  // Parse audio data using Web Audio API (same as WebAudioStreamer)
+  const parseWavData = async (arrayBuffer: ArrayBuffer): Promise<Float32Array> => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
       
-      return samples;
+      // Extract channel data (assume mono or use first channel)
+      const channelData = audioBuffer.getChannelData(0);
+      return new Float32Array(channelData);
     } catch (error) {
-      console.error('Error parsing WAV data:', error);
+      console.error('Error decoding audio chunk:', error);
       return new Float32Array(0);
     }
   };
 
-  // Combine all audio chunks into one continuous waveform
-  const combineAudioData = (): Float32Array => {
+  // Combine all audio chunks into one continuous waveform using Web Audio API
+  const combineAudioData = async (): Promise<Float32Array> => {
     if (audioChunks.length === 0) return new Float32Array(0);
     
-    const allSamples: Float32Array[] = audioChunks.map(parseWavData);
-    const totalLength = allSamples.reduce((sum, samples) => sum + samples.length, 0);
+    const allSamples: Float32Array[] = [];
     
+    for (const chunk of audioChunks) {
+      const samples = await parseWavData(chunk);
+      allSamples.push(samples);
+    }
+    
+    const totalLength = allSamples.reduce((sum, samples) => sum + samples.length, 0);
     const combined = new Float32Array(totalLength);
     let offset = 0;
     
@@ -70,14 +112,14 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
   };
 
   // Draw waveform on canvas
-  const drawWaveform = () => {
+  const drawWaveform = async () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    const audioData = combineAudioData();
+    const audioData = await combineAudioData();
     if (audioData.length === 0) {
       // Clear canvas if no data
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -171,18 +213,18 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     ctx.lineTo(width, height);
     ctx.stroke();
     
-    // Draw chunk boundaries
+    // Draw chunk boundaries (simplified - will be drawn after chunks are processed)
     if (audioChunks.length > 1) {
       ctx.strokeStyle = '#EF4444'; // Red chunk boundaries
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 5]);
       
-      let currentSampleOffset = 0;
-      for (let i = 0; i < audioChunks.length - 1; i++) {
-        const chunkSamples = parseWavData(audioChunks[i]);
-        currentSampleOffset += chunkSamples.length;
-        
-        const x = ((currentSampleOffset - startSample) / samplesPerPixel);
+      // For now, draw boundaries at estimated positions
+      // TODO: Implement proper async chunk boundary calculation
+      const estimatedChunkDuration = audioData.length / audioChunks.length;
+      for (let i = 1; i < audioChunks.length; i++) {
+        const estimatedBoundary = i * estimatedChunkDuration;
+        const x = ((estimatedBoundary - startSample) / samplesPerPixel);
         
         if (x >= 0 && x <= width) {
           ctx.beginPath();
@@ -196,9 +238,19 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     
     // Draw playback position indicator
     if (audioChunks.length > 0 && totalSamples > 0) {
-      // Get actual sample rate from first chunk's WAV header
-      const firstChunkView = new DataView(audioChunks[0]);
-      const actualSampleRate = firstChunkView.getUint32(24, true);
+      // Get sample rate - either from WAV header or use default
+      let actualSampleRate = 48000; // Default TTS sample rate
+      
+      if (audioChunks[0].byteLength >= 28) {
+        const firstChunkView = new DataView(audioChunks[0]);
+        const isWavFile = firstChunkView.getUint32(0, false) === 0x52494646 && // "RIFF"
+                         firstChunkView.getUint32(8, false) === 0x57415645;   // "WAVE"
+        
+        if (isWavFile) {
+          actualSampleRate = firstChunkView.getUint32(24, true);
+        }
+      }
+      
       const playbackSample = currentPlaybackPosition * actualSampleRate;
       const playbackX = ((playbackSample - startSample) / samplesPerPixel);
       
@@ -258,69 +310,58 @@ export const AudioWaveform: React.FC<AudioWaveformProps> = ({
     setVerticalZoom(parseFloat(e.target.value));
   };
 
-  // Create combined audio blob from all chunks
-  const createCombinedAudioBlob = (): Blob | null => {
+  // Create combined audio blob from all chunks using Web Audio API (like WebAudioStreamer)
+  const createCombinedAudioBlob = async (): Promise<Blob | null> => {
     if (audioChunks.length === 0) return null;
     
-    // Read audio format from first chunk's WAV header
-    const firstChunkView = new DataView(audioChunks[0]);
-    const sampleRate = firstChunkView.getUint32(24, true);
-    const numChannels = firstChunkView.getUint16(22, true);
-    const bitsPerSample = firstChunkView.getUint16(34, true);
-    const byteRate = firstChunkView.getUint32(28, true);
-    const blockAlign = firstChunkView.getUint16(32, true);
-    
-    // Extract PCM data from each chunk (skip WAV headers)
-    const pcmDataArrays: Uint8Array[] = [];
-    let totalPcmBytes = 0;
-    
-    for (const chunk of audioChunks) {
-      // Skip WAV header (44 bytes) and extract PCM data
-      const pcmData = new Uint8Array(chunk.slice(44));
-      pcmDataArrays.push(pcmData);
-      totalPcmBytes += pcmData.length;
-    }
-    
-    // Create new WAV file with combined PCM data
-    const wavBuffer = new ArrayBuffer(44 + totalPcmBytes);
-    const view = new DataView(wavBuffer);
-    
-    // Write WAV header
-    const writeString = (offset: number, string: string) => {
-      for (let i = 0; i < string.length; i++) {
-        view.setUint8(offset + i, string.charCodeAt(i));
+    try {
+      // Use Web Audio API to decode each chunk (same as WebAudioStreamer)
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const decodedBuffers: AudioBuffer[] = [];
+      
+      for (const chunk of audioChunks) {
+        try {
+          const audioBuffer = await audioContext.decodeAudioData(chunk.slice(0));
+          decodedBuffers.push(audioBuffer);
+          console.log(`Audio Waveform Debug - Decoded chunk: ${audioBuffer.length} samples, ${audioBuffer.duration.toFixed(3)}s`);
+        } catch (decodeError) {
+          console.error('Audio Waveform Debug - Failed to decode chunk:', decodeError);
+        }
       }
-    };
-    
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + totalPcmBytes, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true); // PCM format size
-    view.setUint16(20, 1, true);  // PCM format
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, byteRate, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitsPerSample, true);
-    writeString(36, 'data');
-    view.setUint32(40, totalPcmBytes, true);
-    
-    // Copy all PCM data
-    const combinedData = new Uint8Array(wavBuffer);
-    let offset = 44;
-    
-    for (const pcmData of pcmDataArrays) {
-      combinedData.set(pcmData, offset);
-      offset += pcmData.length;
+      
+      if (decodedBuffers.length === 0) {
+        console.error('Audio Waveform Debug - No chunks could be decoded');
+        return null;
+      }
+      
+      // Combine all decoded buffers into one
+      const totalLength = decodedBuffers.reduce((sum, buffer) => sum + buffer.length, 0);
+      const sampleRate = decodedBuffers[0].sampleRate;
+      const numChannels = decodedBuffers[0].numberOfChannels;
+      
+      const combinedBuffer = audioContext.createBuffer(numChannels, totalLength, sampleRate);
+      
+      let offset = 0;
+      for (const buffer of decodedBuffers) {
+        for (let channel = 0; channel < numChannels; channel++) {
+          const channelData = buffer.getChannelData(channel);
+          combinedBuffer.getChannelData(channel).set(channelData, offset);
+        }
+        offset += buffer.length;
+      }
+      
+      // Convert back to WAV blob for playback
+      return audioBufferToWav(combinedBuffer);
+      
+    } catch (error) {
+      console.error('Audio Waveform Debug - Failed to combine audio:', error);
+      return null;
     }
-    
-    return new Blob([combinedData], { type: 'audio/wav' });
   };
 
   // Playback controls
-  const handlePlay = () => {
-    const audioBlob = createCombinedAudioBlob();
+  const handlePlay = async () => {
+    const audioBlob = await createCombinedAudioBlob();
     if (!audioBlob) return;
     
     if (audioRef.current) {
