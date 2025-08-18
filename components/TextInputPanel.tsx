@@ -160,7 +160,7 @@ export function TextInputPanel({
                 value={description}
                 onChange={(e) => setDescription?.(e.target.value)}
                 placeholder="e.g., calm, whispering, excited, sarcastic"
-                className="w-full px-2 py-1 text-sm border border-green-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500"
+                className="w-full px-2 py-1 text-sm border border-green-300 rounded focus:outline-none focus:ring-1 focus:ring-green-500 bg-white"
               />
               <p className="text-xs text-green-600 mt-1">
                 Use concise terms like &quot;excited, whispering&quot; or &quot;calm, pedagogical&quot;
