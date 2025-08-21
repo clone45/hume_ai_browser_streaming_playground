@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Mic, MessageSquare } from 'lucide-react';
+import { Mic, MessageSquare, Zap } from 'lucide-react';
 
 export function TabNavigation() {
   const pathname = usePathname();
@@ -28,6 +28,13 @@ export function TabNavigation() {
       href: '/chunked',
       icon: Mic,
       description: 'Simulated LLM chunked output'
+    },
+    {
+      id: 'interruption',
+      label: 'Interruption Handling',
+      href: '/interruption',
+      icon: Zap,
+      description: 'Test interruption scenarios'
     }
   ];
 

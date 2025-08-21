@@ -57,12 +57,12 @@ export class WebAudioStreamer {
   /**
    * Add audio chunk for streaming playback
    */
-  async enqueue(base64Data: string): Promise<void> {
+  async enqueue(base64Data: string, isPCM: boolean = true): Promise<void> {
     if (!base64Data) return;
     
     try {
       const arrivalTime = this.audioContext.currentTime;
-      this.log(`📦 Chunk received (${base64Data.length} chars base64)`);
+      this.log(`📦 Chunk received (${base64Data.length} chars base64, ${isPCM ? 'PCM' : 'MP3'})`);
       
       // Convert base64 to ArrayBuffer
       const binaryString = atob(base64Data);
@@ -74,9 +74,30 @@ export class WebAudioStreamer {
       // Store raw audio data for waveform analysis
       this.audioDataChunks.push(bytes.buffer.slice(0));
       
-      // Decode audio data using Web Audio API
-      const audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
-      this.log(`🔄 Decoded to ${audioBuffer.length} samples (${audioBuffer.duration.toFixed(3)}s)`);
+      let audioBuffer: AudioBuffer;
+      
+      if (isPCM) {
+        // For PCM data, create AudioBuffer directly
+        // Hume AI PCM is 48kHz, mono, 16-bit PCM
+        const sampleRate = 48000;
+        const numSamples = bytes.length / 2; // 16-bit = 2 bytes per sample
+        
+        audioBuffer = this.audioContext.createBuffer(1, numSamples, sampleRate);
+        const channelData = audioBuffer.getChannelData(0);
+        
+        // Convert 16-bit PCM to float32
+        const dataView = new DataView(bytes.buffer);
+        for (let i = 0; i < numSamples; i++) {
+          const sample = dataView.getInt16(i * 2, true); // little-endian
+          channelData[i] = sample / 32768.0; // Convert to -1.0 to 1.0 range
+        }
+        
+        this.log(`🔄 PCM converted to ${audioBuffer.length} samples (${audioBuffer.duration.toFixed(3)}s)`);
+      } else {
+        // For MP3, decode using Web Audio API
+        audioBuffer = await this.audioContext.decodeAudioData(bytes.buffer.slice(0));
+        this.log(`🔄 MP3 decoded to ${audioBuffer.length} samples (${audioBuffer.duration.toFixed(3)}s)`);
+      }
       
       // Drop oldest if buffer full
       if (this.bufferQueue.length >= this.MAX_BUFFER_SIZE) {

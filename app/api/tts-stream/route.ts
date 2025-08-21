@@ -21,7 +21,10 @@ export async function POST(request: NextRequest) {
         {
           text: text.trim()
         }
-      ]
+      ],
+      format: { type: 'pcm' },  // Match frontend PCM format
+      strip_headers: true,
+      instant_mode: true  // Always enabled since voice ID is now required in UI
     };
 
     // Add acting instructions to the utterance if provided
@@ -49,7 +52,9 @@ export async function POST(request: NextRequest) {
       console.log('🔗 Adding continuation context:', payload.context);
     }
 
-    // Add voice if provided, otherwise disable instant mode
+    // instant_mode and strip_headers already set above in payload
+
+    // Add voice if provided, with fallback to ensure instant mode works
     if (payload.voice) {
       // Check if voice is a string (just ID) or object (ID + provider)
       if (typeof payload.voice === 'string') {
@@ -60,11 +65,10 @@ export async function POST(request: NextRequest) {
       } else {
         utterance.voice = payload.voice;
       }
-      // Enable instant mode when voice is provided
-      humePayload.instant_mode = true;
     } else {
-      // Disable instant mode when no voice is provided
-      humePayload.instant_mode = false;
+      // When no voice is provided, don't set a voice field - let Hume use default
+      // Remove the voice field entirely to avoid validation errors
+      console.log('🎤 No voice specified, using Hume AI default voice');
     }
 
     // Log the payload being sent to Hume for debugging
